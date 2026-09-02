@@ -14,7 +14,7 @@ def configurar(bot_recibido):
 def registrar_raton():
 
     @bot.message_handler(commands=["raton"])
-    def iniciar_raton(message):
+    def iniciar_raton_comando(message):
 
         try:
             miembro = bot.get_chat_member(
@@ -120,8 +120,14 @@ Uno de ustedes será el Ratón...
 
         datos.timer_raton.start()
 
+    # OJO: este handler solo debe capturar unirse/salir.
+    # Antes usaba startswith("raton_"), lo que interceptaba TODOS los
+    # callbacks del juego (ver_rol, escondites, votos) porque este
+    # handler se registra primero y telebot ejecuta solo el primer
+    # handler cuyo filtro haga match. Por eso nunca llegaban a
+    # dispararse los otros handlers.
     @bot.callback_query_handler(
-        func=lambda call: call.data.startswith("raton_")
+        func=lambda call: call.data in ["raton_unirse", "raton_salir"]
     )
     def botones_raton(call):
 
@@ -195,9 +201,22 @@ Uno de ustedes será el Ratón...
 🐭 Preparando la partida..."""
                 )
 
-                iniciar_raton()
+                iniciar_partida_raton()
 
         elif call.data == "raton_salir":
+
+            # Antes se podía salir en cualquier momento, incluso con
+            # roles ya asignados o votación en curso, lo que rompía
+            # las comparaciones de longitud contra "participantes"
+            # más adelante. Ahora, una vez cerradas las inscripciones
+            # ya no se puede abandonar la partida.
+            if datos.raton["inscripciones_cerradas"]:
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ La partida ya comenzó, no puedes salir.",
+                    show_alert=True
+                )
+                return
 
             if usuario not in datos.raton["participantes"]:
                 bot.answer_callback_query(
@@ -441,9 +460,9 @@ def cerrar_inscripciones_raton():
 🐭 Preparando la partida..."""
     )
 
-    iniciar_raton()
+    iniciar_partida_raton()
 
-def iniciar_raton():
+def iniciar_partida_raton():
 
     if not datos.raton["activa"]:
         return
@@ -461,16 +480,7 @@ def iniciar_raton():
             "(｡•́︿•̀｡) No hay suficientes participantes para comenzar."
         )
 
-        datos.raton["activa"] = False
-        datos.raton["inscripciones_cerradas"] = False
-        datos.raton["iniciando_ronda"] = False
-        datos.raton["premio"] = 0
-        datos.raton["cupos"] = 0
-        datos.raton["participantes"] = []
-
-        datos.grupo_raton = None
-        datos.admin_raton = None
-
+        reiniciar_estado_raton()
         return
 
     datos.raton["raton"] = random.choice(
@@ -599,9 +609,9 @@ def mostrar_pistas_raton():
         datos.grupo_raton,
         mensaje
     )
-    
+
     iniciar_votacion_raton()
-    
+
 def iniciar_votacion_raton():
 
     if not datos.raton["activa"]:
@@ -694,3 +704,34 @@ El verdadero Ratón sigue escondido... 👀"""
         datos.grupo_raton,
         texto
     )
+
+    # Antes la partida quedaba "activa" para siempre después de la
+    # votación, así que nunca se podía iniciar un /raton nuevo hasta
+    # reiniciar el bot. Ahora se cierra y se limpia el estado.
+    reiniciar_estado_raton()
+
+def reiniciar_estado_raton():
+
+    if datos.timer_raton is not None:
+        datos.timer_raton.cancel()
+        datos.timer_raton = None
+
+    datos.raton["activa"] = False
+    datos.raton["inscripciones_cerradas"] = False
+    datos.raton["iniciando_ronda"] = False
+
+    datos.raton["premio"] = 0
+    datos.raton["cupos"] = 0
+    datos.raton["participantes"] = []
+
+    datos.raton["raton"] = None
+    datos.raton["roles_revisados"] = []
+
+    datos.raton["ronda"] = 0
+    datos.raton["elecciones"] = {}
+    datos.raton["votos"] = {}
+
+    datos.raton["resultado_enviado"] = False
+
+    datos.grupo_raton = None
+    datos.admin_raton = None
