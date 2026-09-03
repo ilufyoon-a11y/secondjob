@@ -36,6 +36,12 @@ def registrar_comandos():
         elif datos.dividir["activa"]:
             participantes_actuales = datos.dividir["participantes"]
 
+        # FIX: /participantes no contemplaba la partida de Ratón, así
+        # que si esa era la partida activa, el comando reportaba
+        # "no hay participantes" aunque sí los hubiera.
+        elif datos.raton["activa"]:
+            participantes_actuales = datos.raton["participantes"]
+
         if not participantes_actuales:
             bot.send_message(
                 message.chat.id,
@@ -80,6 +86,13 @@ def registrar_comandos():
             datos.eliminados.clear()
             datos.avisados_eliminados.clear()
 
+            # Nota: el timer de cierre de inscripciones del adivinador
+            # no se guarda en ninguna variable de datos.py, así que no
+            # se puede cancelar desde acá. No es un problema porque
+            # ese timer valida el "id" de la partida antes de actuar
+            # (ver cerrar_inscripciones en adivinador_bot.py), así que
+            # un timer viejo no puede afectar una partida cancelada.
+
             bot.send_message(
                 message.chat.id,
                 "(ᵕ—ᴗ—) El adivinador fue cancelado."
@@ -89,13 +102,38 @@ def registrar_comandos():
         # Cancelar dividir
         if datos.dividir["activa"]:
 
+            # FIX: antes no se cancelaban los timers de Dividir. Si
+            # timer_dividir, timer_jugador1 o timer_jugador2 llegaban
+            # a dispararse después de este reset, iban a intentar
+            # mandar mensajes a datos.grupo_dividir ya en None, lo
+            # que revienta con una excepción.
+            if datos.timer_dividir is not None:
+                datos.timer_dividir.cancel()
+                datos.timer_dividir = None
+
+            if datos.timer_jugador1 is not None:
+                datos.timer_jugador1.cancel()
+                datos.timer_jugador1 = None
+
+            if datos.timer_jugador2 is not None:
+                datos.timer_jugador2.cancel()
+                datos.timer_jugador2 = None
+
             datos.dividir["activa"] = False
             datos.dividir["inscripciones_cerradas"] = False
+            datos.dividir["iniciando_ronda"] = False
             datos.dividir["participantes"] = []
             datos.dividir["jugador1"] = None
             datos.dividir["jugador2"] = None
             datos.dividir["eleccion1"] = None
             datos.dividir["eleccion2"] = None
+            datos.dividir["elegidos"] = []
+            datos.dividir["revisaron"] = []
+            datos.dividir["turno_iniciado"] = False
+            datos.dividir["turno2_enviado"] = False
+            datos.dividir["resultado_enviado"] = False
+            datos.dividir["perdio_tiempo1"] = False
+            datos.dividir["perdio_tiempo2"] = False
             datos.dividir["premio"] = 0
             datos.dividir["cupos"] = 0
 
@@ -105,6 +143,37 @@ def registrar_comandos():
             bot.send_message(
                 message.chat.id,
                 "(ᵕ—ᴗ—) La partida fue cancelada."
+            )
+            return
+
+        # FIX: /cancelar no contemplaba la partida de Ratón, así que
+        # si esa era la partida activa, caía siempre al mensaje de
+        # "No hay ninguna partida activa" sin poder cancelarla.
+        if datos.raton["activa"]:
+
+            if datos.timer_raton is not None:
+                datos.timer_raton.cancel()
+                datos.timer_raton = None
+
+            datos.raton["activa"] = False
+            datos.raton["inscripciones_cerradas"] = False
+            datos.raton["iniciando_ronda"] = False
+            datos.raton["premio"] = 0
+            datos.raton["cupos"] = 0
+            datos.raton["participantes"] = []
+            datos.raton["raton"] = None
+            datos.raton["roles_revisados"] = []
+            datos.raton["ronda"] = 0
+            datos.raton["elecciones"] = {}
+            datos.raton["votos"] = {}
+            datos.raton["resultado_enviado"] = False
+
+            datos.grupo_raton = None
+            datos.admin_raton = None
+
+            bot.send_message(
+                message.chat.id,
+                "(ᵕ—ᴗ—) La partida de Ratón fue cancelada."
             )
             return
 
@@ -133,20 +202,25 @@ def registrar_comandos():
         texto = "𐚁 Robux Ganados ˖ ࣪⊹\n\n"
 
         total = 0
-        
-        for jugador, total in datos.sumar_historial.items():
-            
-            if total > 0:
-                texto += f"✿ {jugador} → +{total} Robux\n"
-                
-            elif total < 0:
-                texto += f"✿ {jugador} → {total} Robux\n"
-                
+
+        # FIX: el bucle usaba "total" como nombre de la variable de
+        # iteración, pisando el acumulador, y sumaba una variable
+        # "cantidad" que nunca existía (NameError garantizado). Ahora
+        # se usa "cantidad" para el valor de cada jugador y "total"
+        # queda libre como acumulador real.
+        for jugador, cantidad in datos.sumar_historial.items():
+
+            if cantidad > 0:
+                texto += f"✿ {jugador} → +{cantidad} Robux\n"
+
+            elif cantidad < 0:
+                texto += f"✿ {jugador} → {cantidad} Robux\n"
+
             else:
                 texto += f"✿ {jugador} → 0 Robux\n"
-                
+
             total += cantidad
-            
+
         texto += f"\n     ✮⋆˙ Total : {total} Robux"
       
         bot.send_message(
@@ -205,6 +279,12 @@ def registrar_comandos():
 
         if usuario in datos.dividir["participantes"]:
             datos.dividir["participantes"].remove(usuario)
+
+        # FIX: banwiwi no removía al usuario de la partida de Ratón,
+        # a diferencia de juego y dividir. Quedaba vetado pero seguía
+        # contando como participante activo en esa partida.
+        if usuario in datos.raton["participantes"]:
+            datos.raton["participantes"].remove(usuario)
 
         if usuario in datos.oportunidades:
             del datos.oportunidades[usuario]
