@@ -131,6 +131,17 @@ Uno de ustedes será el Ratón...
     )
     def botones_raton(call):
 
+        # FIX: sin esto, un botón viejo de OTRO grupo (de una partida
+        # anterior que ya no está activa en ese chat) podía manipular
+        # la única partida global de datos.raton, aunque fuera de un
+        # grupo distinto al de la partida actual.
+        if call.message.chat.id != datos.grupo_raton:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
+
         if not datos.raton["activa"]:
             bot.answer_callback_query(
                 call.id,
@@ -242,6 +253,14 @@ Uno de ustedes será el Ratón...
     )
     def ver_rol_raton(call):
 
+        # FIX: misma validación de chat que en botones_raton.
+        if call.message.chat.id != datos.grupo_raton:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
+
         usuario = (
             f"@{call.from_user.username}"
             if call.from_user.username
@@ -322,6 +341,14 @@ El Ratón está buscando dónde esconderse... 👀"""
     )
     def elegir_escondite(call):
 
+        # FIX: misma validación de chat que en botones_raton.
+        if call.message.chat.id != datos.grupo_raton:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
+
         usuario = (
             f"@{call.from_user.username}"
             if call.from_user.username
@@ -385,6 +412,14 @@ El Ratón está buscando dónde esconderse... 👀"""
     )
     def votar_raton(call):
 
+        # FIX: misma validación de chat que en botones_raton.
+        if call.message.chat.id != datos.grupo_raton:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
+
         usuario = (
             f"@{call.from_user.username}"
             if call.from_user.username
@@ -412,6 +447,16 @@ El Ratón está buscando dónde esconderse... 👀"""
             "",
             1
         )
+
+        # FIX: antes se podía votar por uno mismo. En un juego de
+        # "encuentra al impostor" no tiene sentido permitirlo.
+        if elegido == usuario:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No puedes votar por ti mismo.",
+                show_alert=True
+            )
+            return
 
         if elegido not in datos.raton["participantes"]:
             bot.answer_callback_query(
@@ -643,6 +688,28 @@ crees que es el Ratón.
         reply_markup=markup
     )
 
+def _pagar_robux(usuario, monto):
+    """
+    Aplica el resultado económico de la partida a un participante,
+    igual que hace adivinador_bot.py con datos.historial /
+    datos.historial_juegos / datos.sumar_historial.
+    monto puede ser positivo (ganancia) o negativo (pérdida).
+    """
+    signo = "+" if monto >= 0 else ""
+
+    datos.historial[usuario] = f"{signo}{monto} Robux"
+
+    if usuario not in datos.historial_juegos:
+        datos.historial_juegos[usuario] = []
+
+    datos.historial_juegos[usuario].append(
+        ("Ratón", f"{signo}{monto} Robux")
+    )
+
+    datos.sumar_historial[usuario] = (
+        datos.sumar_historial.get(usuario, 0) + monto
+    )
+
 def mostrar_resultado_votacion_raton():
 
     if not datos.raton["activa"]:
@@ -674,6 +741,15 @@ def mostrar_resultado_votacion_raton():
 
     texto += "\n"
 
+    premio = datos.raton["premio"]
+    raton = datos.raton["raton"]
+    participantes = datos.raton["participantes"]
+
+    # FIX: antes nadie ganaba ni perdía robux al terminar la partida.
+    # Reparto: si atrapan al Ratón, cada gato (todos menos el Ratón)
+    # gana el premio y el Ratón lo pierde. Si el Ratón escapa (votación
+    # errada, sin empate), el Ratón gana el premio y nadie más cobra.
+    # En caso de empate no se paga nada, como ya decía el mensaje.
     if len(empatados) > 1:
 
         texto += """⚠️ ¡Hay un empate!
@@ -684,13 +760,20 @@ Nadie será eliminado esta ronda. 👀"""
 
         elegido = empatados[0]
 
-        if elegido == datos.raton["raton"]:
+        if elegido == raton:
 
             texto += f"""🎯 ¡Encontraron al Ratón!
 
 🐭 El Ratón era {elegido}.
 
-✨ Los gatos ganan esta ronda."""
+✨ Los gatos ganan esta ronda.
+🏆 Cada gato gana {premio} Robux."""
+
+            for participante in participantes:
+                if participante == raton:
+                    _pagar_robux(participante, -premio)
+                else:
+                    _pagar_robux(participante, premio)
 
         else:
 
@@ -698,7 +781,10 @@ Nadie será eliminado esta ronda. 👀"""
 
 🐭 {elegido} NO era el Ratón.
 
-El verdadero Ratón sigue escondido... 👀"""
+El verdadero Ratón sigue escondido... 👀
+🏆 {raton} (el Ratón) gana {premio} Robux."""
+
+            _pagar_robux(raton, premio)
 
     bot.send_message(
         datos.grupo_raton,
