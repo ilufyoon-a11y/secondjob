@@ -59,6 +59,7 @@ def registrar_dividir():
             
         datos.dividir["activa"] = True
         datos.dividir["inscripciones_cerradas"] = False
+        datos.dividir["iniciando_ronda"] = False
         datos.dividir["premio"] = premio
         datos.dividir["cupos"] = cupos
         datos.dividir["participantes"] = []
@@ -114,6 +115,17 @@ o uno traicionará al otro?
     @bot.callback_query_handler(
         func=lambda call: call.data.startswith("dividir_"))   
     def botones_dividir(call):
+
+        # FIX: sin esto, un botón viejo de OTRO grupo (de una partida
+        # anterior) podía manipular la única partida global de
+        # datos.dividir, aunque fuera de un grupo distinto al de la
+        # partida actual. Mismo bug que ya se corrigió en raton.py.
+        if call.message.chat.id != datos.grupo_dividir:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
         
         if not datos.dividir["activa"]:
             bot.answer_callback_query(
@@ -129,6 +141,16 @@ o uno traicionará al otro?
         )
         
         if call.data == "dividir_unirse":
+
+            # FIX: raton.py ya validaba vetados al unirse, dividir.py
+            # no lo hacía, así que un usuario expulsado podía seguir
+            # jugando Dividir/Robar con normalidad.
+            if usuario in datos.vetados:
+                bot.answer_callback_query(
+                    call.id,
+                    "🚫 Has sido expulsado."
+                )
+                return
             
             if usuario in datos.dividir["participantes"]:
                 bot.answer_callback_query(
@@ -220,13 +242,7 @@ o uno traicionará al otro?
                 "(｡•́︿•̀｡) No hay suficientes participantes para comenzar la partida."
             )
             
-            datos.dividir["activa"] = False
-            datos.dividir["inscripciones_cerradas"] = False
-            datos.dividir["iniciando_ronda"] = False
-            datos.dividir["premio"] = 0
-            datos.dividir["cupos"] = 0
-            datos.dividir["participantes"] = []
-            
+            reiniciar_estado_dividir()
             return
             
         texto = "── .ꕥ Participantes:\n\n"
@@ -248,17 +264,44 @@ o uno traicionará al otro?
         
         datos.dividir["elegidos"] = jugadores
         datos.dividir["revisaron"] = []
-        
-        bot.send_message(
-            datos.admin_dividir,
-            f"""(૭ ｡•̀ ᵕ •́｡ )૭ Resultado secreto
+
+        # FIX: este envío por DM al admin no tenía try/except. Si el
+        # admin nunca le escribió antes al bot en privado, Telegram
+        # rechaza el mensaje (el bot no puede iniciar conversaciones)
+        # y la excepción cortaba la función a la mitad: el botón
+        # "Ver resultado" nunca se mandaba y la partida quedaba
+        # colgada para siempre. Ahora se avisa en el grupo y se
+        # cancela la partida de forma limpia si el DM falla.
+        try:
+            bot.send_message(
+                datos.admin_dividir,
+                f"""(૭ ｡•̀ ᵕ •́｡ )૭ Resultado secreto
         
 Jugador secreto 1:
 {jugadores[0]}
 
 Jugador secreto 2:
 {jugadores[1]}"""
-        )
+            )
+        except Exception as e:
+            print("ERROR DM ADMIN DIVIDIR:", e)
+
+            bot.send_message(
+                datos.grupo_dividir,
+                """⚠️ No pude enviarle el resultado secreto al
+administrador por privado.
+
+Para jugar Dividir o Robar, el administrador debe
+escribirle primero al bot por DM (cualquier mensaje,
+por ejemplo /start) y luego iniciar la partida de nuevo.
+
+❌ Esta partida fue cancelada."""
+            )
+
+            reiniciar_estado_dividir()
+            return
+
+        datos.dividir["iniciando_ronda"] = False
         
         markup = InlineKeyboardMarkup()
         
@@ -281,6 +324,14 @@ Jugador secreto 2:
         func=lambda call: call.data == "ver_resultado_dividir"
     )
     def ver_resultado_dividir(call):
+
+        # FIX: misma validación de chat que en botones_dividir.
+        if call.message.chat.id != datos.grupo_dividir:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
         
         usuario = (
             f"@{call.from_user.username}"
@@ -446,6 +497,14 @@ Es tu turno.
         func=lambda call: call.data in ["elegir_dividir", "elegir_robar"]
     )
     def elegir_opcion(call):
+
+        # FIX: misma validación de chat que en botones_dividir.
+        if call.message.chat.id != datos.grupo_dividir:
+            bot.answer_callback_query(
+                call.id,
+                "❌ No hay ninguna partida activa aquí."
+            )
+            return
 
         usuario = (
             f"@{call.from_user.username}"
@@ -660,6 +719,22 @@ Nadie gana el premio."""
             mensaje
         )
         
+        reiniciar_estado_dividir()
+
+    def reiniciar_estado_dividir():
+
+        if datos.timer_dividir is not None:
+            datos.timer_dividir.cancel()
+            datos.timer_dividir = None
+
+        if datos.timer_jugador1 is not None:
+            datos.timer_jugador1.cancel()
+            datos.timer_jugador1 = None
+
+        if datos.timer_jugador2 is not None:
+            datos.timer_jugador2.cancel()
+            datos.timer_jugador2 = None
+
         datos.dividir["activa"] = False
         datos.dividir["inscripciones_cerradas"] = False
         datos.dividir["premio"] = 0
